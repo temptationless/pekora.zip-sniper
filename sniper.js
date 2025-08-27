@@ -4,21 +4,25 @@ const fetch = require('node-fetch');
 // Config
 const SniperConfig = {
     // Discord Account token, not bot token
-    AccountToken: null, // 'Discord Account Token',
-    ChatCheckChannelId: null, // 'Channel Id',
+    AccountToken: 'DISCORD_TOKEN_HERE',
+    // optional just will send a chat message saying "took xMS", to turn on turn DoChatChecks: false, to true on line 25 (default)
+    ChatCheckChannelId: 'CHAT_CHECK_CHANNEL_ID',
+    // to remove a channel remove the line (eg line 13) and the comma on line 12
+    // to add a channel create a new line inside the brakets, 'CHANNEL_ID' (make sure to add a comma at the end on the line above)
     channelIds: [
-        // 'Channel Id #1',
-        // 'Channel Id #2',
-        // 'Channel Id #3'
+         'CHANNEL_ID_1',
+         'CHANNEL_ID_2',
+         'CHANNEL_ID_3'
     ],
     
+
     // Your Pekora cookie (get from browser DevTools use f12 then go to "Privacy and Security" and find ".PEKOSECURITY")
-    pekoraCookie: null, // 'Pekora Cookie',
+    pekoraCookie:  'Pekora Cookie',
     
     MaxPrice: 100,
     PurchaseDelay: 100, // Delay in ms
     IsEnabled: true, // Set to false to just monitor without buying
-    DoChatChecks: true // Want you to say stuff in chat (use a priv disc server for this)
+    DoChatChecks: false // Want you to say stuff in chat (use a priv disc server for this)
 };
 
 
