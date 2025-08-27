@@ -387,9 +387,9 @@ async function ConsoleLog(Events, Data) {
             console.clear();
             console.log(`
 ╔════════════════════════════════════════╗
-║      PEKORA.ZIP DISCORD SNIPER BOT     ║
-║           TIX FIXED VERSION            ║
-║   (Made With love - Betrval)           ║
+║        PEKORA.ZIP ITEM SNIPER          ║
+║         DISCORD FIXED VERSION          ║
+║       (first public item sniper?)      ║
 ╠════════════════════════════════════════╣
 ║   Status: ONLINE                       ║
 ║   User: ${username.padEnd(28)}║
@@ -471,7 +471,7 @@ function Reconnect() {
 
 // Hello to Console
 console.log(`
- PEKORA.ZIP DISCORD SNIPER
+ PEKORA.ZIP ITEM SNIPER
 ════════════════════════════
 
 `);
