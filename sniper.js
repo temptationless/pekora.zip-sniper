@@ -1,65 +1,63 @@
 const WebSocket = require('ws');
 const fetch = require('node-fetch');
 
-// ============= CONFIGURATION =============
-const config = {
-    // Your Discord token (NOT a bot token, your actual account token)
-    discordToken: 'YOUR_DISCORD_TOKEN_HERE',
-    
-    // Channel IDs to monitor (right-click channel -> Copy ID with dev mode enabled)
+// Config
+const SniperConfig = {
+    // Discord Account token, not bot token
+    AccountToken: null, // 'Discord Account Token',
+    ChatCheckChannelId: null, // 'Channel Id',
     channelIds: [
-        'CHANNEL_ID_1',
-        'CHANNEL_ID_2',
-        'CHANNEL_ID_3'
+        // 'Channel Id #1',
+        // 'Channel Id #2',
+        // 'Channel Id #3'
     ],
     
-    // Your Pekora.zip cookie (get from browser DevTools)
-    pekoraCookie: 'YOUR_PEKORA_COOKIE_HERE',
+    // Your Pekora cookie (get from browser DevTools use f12 then go to "Privacy and Security" and find ".PEKOSECURITY")
+    pekoraCookie: null, // 'Pekora Cookie',
     
-    // Auto-buy settings
-    maxPrice: 10000,        // Maximum price to auto-buy
-    buyDelay: 100,          // Delay in ms before buying
-    enabled: true           // Set to false to just monitor without buying
+    MaxPrice: 100,
+    PurchaseDelay: 100, // Delay in ms
+    IsEnabled: true, // Set to false to just monitor without buying
+    DoChatChecks: true // Want you to say stuff in chat (use a priv disc server for this)
 };
 
 
-const processedItems = new Set();
+const ProcessedItems = new Set();
 let ws = null;
-let heartbeatInterval = null;
-let sessionId = null;
-let resumeGatewayUrl = null;
+let HeartbeatInterval = null;
+let SessionId = null;
+let ResumeGatewayUrl = null;
 let username = 'Unknown';
-let stats = { messages: 0, items: 0, purchases: 0 };
+let CurrentStats = { messages: 0, items: 0, purchases: 0 };
 
 
-function extractItemIds(text) {
+function GetItemIds(Id) {
     const patterns = [
         /pekora\.zip\/catalog\/(\d+)/gi,
-        /pekora\.zip\/item\/(\d+)/gi,
+        /pekora\.zip\/Item\/(\d+)/gi,
         /pekora\.zip\/.*[?&]id=(\d+)/gi,
         /catalog\/(\d+)/gi,
-        /item[s]?\/(\d+)/gi
+        /Item[s]?\/(\d+)/gi
     ];
     
     const itemIds = new Set();
     for (const pattern of patterns) {
         let match;
-        while ((match = pattern.exec(text)) !== null) {
+        while ((match = pattern.exec(Id)) !== null) {
             itemIds.add(match[1]);
         }
     }
     return Array.from(itemIds);
 }
-
-async function getItemInfo(itemId) {
-    console.log(`   [${itemId}] Fetching item info from API...`);
+async function GetItemInfo(ItemId) {
+    console.log(`   [${ItemId}] Fetching Item info from API...`);
     
     try {
-        const apiRes = await fetch('https://www.pekora.zip/apisite/catalog/v1/catalog/items/details', {
+        const PekoraApi = await fetch('https://www.pekora.zip/apisite/catalog/v1/catalog/items/details', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Cookie': `.PEKOSECURITY=${config.pekoraCookie}`,
+                'Cookie': `.PEKOSECURITY=${SniperConfig.pekoraCookie}`,
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept': 'application/json, text/plain, */*',
                 'Origin': 'https://www.pekora.zip',
@@ -71,138 +69,181 @@ async function getItemInfo(itemId) {
             body: JSON.stringify({
                 items: [{
                     itemType: "Asset",
-                    id: parseInt(itemId)
+                    id: parseInt(ItemId)
                 }]
             })
         });
         
-        if (!apiRes.ok) {
-            console.log(`   [${itemId}] API failed with status ${apiRes.status}`);
-            const errorText = await apiRes.text();
-            console.log(`   [${itemId}] API error: ${errorText.substring(0, 200)}`);
+        if (!PekoraApi.ok) {
+            console.log(`   [${ItemId}] API failed with status ${PekoraApi.status}`);
+            const errorText = await PekoraApi.text();
+            console.log(`   [${ItemId}] API error: ${errorText.substring(0, 200)}`);
             return null;
         }
         
-        const data = await apiRes.json();
-        console.log(`   [${itemId}] API response:`, JSON.stringify(data, null, 2));
+        const data = await PekoraApi.json();
+        console.log(`   [${ItemId}] API response:`, JSON.stringify(data, null, 2));
         
         if (!data.data || !data.data[0]) {
-            console.log(`   [${itemId}] No item data in API response`);
+            console.log(`   [${ItemId}] No Item data in API response`);
             return null;
         }
         
-        const item = data.data[0];
+        const Item = data.data[0];
         
  
-        const itemInfo = {
-            id: parseInt(itemId),
-            name: item.name || item.Name || 'Unknown Item',
+        const ItemInfo = {
+            id: parseInt(ItemId),
+            name: Item.name || Item.Name || 'Unknown Item',
             price: 0,
             currency: 1, // 1 = Robux, 2 = Tix
-            sellerId: item.creatorTargetId || item.CreatorTargetId || item.creatorId || item.CreatorId || 1,
-            isForSale: item.isForSale || item.IsForSale || false,
+            sellerId: Item.creatorTargetId || Item.CreatorTargetId || Item.creatorId || Item.CreatorId || 1,
+            isForSale: Item.isForSale || Item.IsForSale || false,
             isFree: false
         };
         
  
-        console.log(`   [${itemId}] RAW DATA - price: ${item.price}, priceTickets: ${item.priceTickets}, isForSale: ${item.isForSale}`);
+        console.log(`   [${ItemId}] RAW DATA - price: ${Item.price}, priceTickets: ${Item.priceTickets}, isForSale: ${Item.isForSale}`);
         
 
-        if (item.priceTickets !== null && item.priceTickets !== undefined && item.priceTickets > 0) {
-            itemInfo.price = item.priceTickets;
-            itemInfo.currency = 2; // Tix
-            console.log(`   [${itemId}]  FOUND TIX PRICE: ${item.priceTickets}`);
+        if (Item.priceTickets !== null && Item.priceTickets !== undefined && Item.priceTickets > 0) {
+            ItemInfo.price = Item.priceTickets;
+            ItemInfo.currency = 2; // Tix
+            console.log(`   [${ItemId}]  FOUND TIX PRICE: ${Item.priceTickets}`);
         }
      
-        else if (item.price !== null && item.price !== undefined && item.price > 0) {
-            itemInfo.price = item.price;
-            itemInfo.currency = 1; // Robux
-            console.log(`   [${itemId}]  FOUND ROBUX PRICE: ${item.price}`);
+        else if (Item.price !== null && Item.price !== undefined && Item.price > 0) {
+            ItemInfo.price = Item.price;
+            ItemInfo.currency = 1; // Robux
+            console.log(`   [${ItemId}]  FOUND ROBUX PRICE: ${Item.price}`);
         }
 
-        else if (item.price === 0 && (item.priceTickets === null || item.priceTickets === 0)) {
-            itemInfo.isFree = true;
-            itemInfo.price = 0;
-            itemInfo.currency = 1; // Free items use Robux currency
-            console.log(`   [${itemId}]  FOUND FREE ITEM`);
+        else if (Item.price === 0 && (Item.priceTickets === null || Item.priceTickets === 0)) {
+            ItemInfo.isFree = true;
+            ItemInfo.price = 0;
+            ItemInfo.currency = 1;
+            console.log(`   [${ItemId}]  FOUND FREE ITEM`);
         }
 
         else {
-            console.log(`   [${itemId}]  NO VALID PRICE FOUND`);
-            console.log(`   [${itemId}]  price=${item.price}, priceTickets=${item.priceTickets}`);
-            itemInfo.isForSale = false;
+            console.log(`   [${ItemId}]  NO VALID PRICE FOUND`);
+            console.log(`   [${ItemId}]  price=${Item.price}, priceTickets=${Item.priceTickets}`);
+            ItemInfo.isForSale = false;
         }
         
-        return itemInfo;
+        return ItemInfo;
         
     } catch (error) {
-        console.log(`   [${itemId}] API error: ${error.message}`);
+        console.log(`   [${ItemId}] API error: ${error.message}`);
         return null;
     }
 }
 
-async function purchaseItem(itemId) {
-    const startTime = Date.now();
-    console.log(`\n💰 [${itemId}] Starting purchase...`);
-    stats.purchases++;
+
+async function PurchaseItem(ItemId) {
+    const StartingTime = Date.now();
+    console.log(`\n💰 [${ItemId}] Starting purchase...`);
+    CurrentStats.purchases++;
     
     try {
 
-        const itemInfo = await getItemInfo(itemId);
+        const ItemInfo = await GetItemInfo(ItemId);
         
-        if (!itemInfo) {
-            console.log(`   [${itemId}]  Could not get item info`);
+        if (!ItemInfo) {
+            console.log(`   [${ItemId}]  Could not get Item info`);
             return false;
         }
         
-        if (!itemInfo.isForSale) {
-            console.log(`   [${itemId}]  Item "${itemInfo.name}" is not for sale`);
+        if (!ItemInfo.isForSale) {
+            console.log(`   [${ItemId}]  Item "${ItemInfo.name}" is not for sale`);
             return false;
         }
         
 
-        if (itemInfo.currency === 1 && itemInfo.price > config.maxPrice) {
-            console.log(`   [${itemId}]  Price ${itemInfo.price} Robux exceeds max ${config.maxPrice} - skipping`);
+        if (ItemInfo.currency === 1 && ItemInfo.price > SniperConfig.MaxPrice) {
+            console.log(`   [${ItemId}]  Price ${ItemInfo.price} Robux exceeds max ${SniperConfig.MaxPrice} - skipping`);
             return false;
         }
         
-        const currencyName = itemInfo.currency === 1 ? 'Robux' : 'Tix';
-        const priceText = itemInfo.isFree ? 'FREE' : `${itemInfo.price} ${currencyName}`;
+        const currencyName = ItemInfo.currency === 1 ? 'Robux' : 'Tix';
+        const priceText = ItemInfo.isFree ? 'FREE' : `${ItemInfo.price} ${currencyName}`;
         
-        console.log(`   [${itemId}] PURCHASING: "${itemInfo.name}" - ${priceText}`);
+        console.log(`   [${ItemId}] PURCHASING: "${ItemInfo.name}" - ${priceText}`);
         
-        return await makePurchase(itemInfo, startTime);
+        return await ConfirmPurchase(ItemInfo, StartingTime);
         
     } catch (error) {
-        console.log(`   [${itemId}]  Error: ${error.message}`);
+        console.log(`   [${ItemId}]  Error: ${error.message}`);
         return false;
     }
 }
 
-async function makePurchase(itemInfo, startTime) {
-    const { id: itemId, name, price, currency, sellerId } = itemInfo;
+// Check
+
+const SendMessage = async (Delay) => {
+    if (SniperConfig.DoChatChecks) {
+        if (SniperConfig.ChatCheckChannelId) {
+        const url = `https://discord.com/api/v9/channels/${SniperConfig.ChatCheckChannelId}/messages`;
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+            'Authorization': SniperConfig.AccountToken,
+            'Content-Type': 'application/json',
+            'User-Agent': 'DiscordBot (https://discord.com, v9)'
+            },
+            body: JSON.stringify({
+            content: `Took: ${Delay}ms`
+            })
+        });
+
+        const Data = await response.json();
+
+        if (response.ok) {
+            // console.log(Data);
+        } else {
+            console.error('Cant Send ', Data);
+        }
+    }
+  }
+};
+
+
+function LoopMessageChecks() {
+  let Delay = Math.floor(Math.random() * (2050 - 1000 + 1)) + 1000;
+
+  setTimeout(() => {
+    SendMessage(Delay);
+    LoopMessageChecks();
+  }, Delay);
+}
+
+LoopMessageChecks();
+
+async function ConfirmPurchase(ItemInfo, StartingTime) {
+    const { id: ItemId, name, price, currency, sellerId } = ItemInfo;
     
-    console.log(`   [${itemId}] Making purchase request...`);
+    console.log(`   [${ItemId}] Making purchase request...`);
     
     const requestBody = {
-        assetId: itemId,
+        assetId: ItemId,
         expectedPrice: price,
         expectedSellerId: sellerId,
         userAssetId: null,
         expectedCurrency: currency
     };
     
-    console.log(`   [${itemId}] Request body: ${JSON.stringify(requestBody)}`);
+    console.log(`   [${ItemId}] Request body: ${JSON.stringify(requestBody)}`);
     
     try {
-        const purchaseRes = await fetch(`https://www.pekora.zip/apisite/economy/v1/purchases/products/${itemId}`, {
+        const PekoraApi = await fetch(`https://www.pekora.zip/apisite/economy/v1/purchases/products/${ItemId}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json, text/plain, */*',
-                'Cookie': `.PEKOSECURITY=${config.pekoraCookie}`,
+                'Cookie': `.PEKOSECURITY=${SniperConfig.pekoraCookie}`,
                 'Origin': 'https://www.pekora.zip',
-                'Referer': `https://www.pekora.zip/catalog/${itemId}`,
+                'Referer': `https://www.pekora.zip/catalog/${ItemId}`,
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'sec-fetch-dest': 'empty',
                 'sec-fetch-mode': 'cors',
@@ -211,78 +252,78 @@ async function makePurchase(itemInfo, startTime) {
             body: JSON.stringify(requestBody)
         });
         
-        const elapsed = Date.now() - startTime;
+        const elapsed = Date.now() - StartingTime;
         
-        if (purchaseRes.ok) {
-            const data = await purchaseRes.json();
+        if (PekoraApi.ok) {
+            const Data = await PekoraApi.json();
             const currencyName = currency === 1 ? 'Robux' : 'Tix';
-            const priceText = itemInfo.isFree ? 'FREE' : `${price} ${currencyName}`;
+            const priceText = ItemInfo.isFree ? 'FREE' : `${price} ${currencyName}`;
             
-            console.log(`   [${itemId}]  SUCCESS! Got "${name}" for ${priceText} in ${elapsed}ms`);
-            console.log(`   [${itemId}] Response: ${JSON.stringify(data)}`);
+            console.log(`   [${ItemId}]  SUCCESS! Got "${name}" for ${priceText} in ${elapsed}ms`);
+            console.log(`   [${ItemId}] Response: ${JSON.stringify(Data)}`);
             return true;
         } else {
-            const errorText = await purchaseRes.text();
-            console.log(`   [${itemId}]  Failed in ${elapsed}ms (Status: ${purchaseRes.status})`);
+            const errorText = await PekoraApi.text();
+            console.log(`   [${ItemId}]  Failed in ${elapsed}ms (Status: ${PekoraApi.status})`);
             
             try {
                 const errorData = JSON.parse(errorText);
                 if (errorData.errors?.[0]?.message) {
-                    console.log(`   [${itemId}] Error: ${errorData.errors[0].message}`);
+                    console.log(`   [${ItemId}] Error: ${errorData.errors[0].message}`);
                 } else {
-                    console.log(`   [${itemId}] Error data: ${JSON.stringify(errorData)}`);
+                    console.log(`   [${ItemId}] Error Data: ${JSON.stringify(errorData)}`);
                 }
             } catch (e) {
-                console.log(`   [${itemId}] Error response: ${errorText.substring(0, 200)}`);
+                console.log(`   [${ItemId}] Error response: ${errorText.substring(0, 200)}`);
             }
         }
     } catch (error) {
-        const elapsed = Date.now() - startTime;
-        console.log(`   [${itemId}]  Network error in ${elapsed}ms: ${error.message}`);
+        const elapsed = Date.now() - StartingTime;
+        console.log(`   [${ItemId}]  Network error in ${elapsed}ms: ${error.message}`);
     }
     
     return false;
 }
 
 
-function connect() {
+function ConnectToDiscord() {
     console.log(' Connecting to Discord...');
     
-    const gatewayUrl = resumeGatewayUrl || 'wss://gateway.discord.gg/?v=9&encoding=json';
+    const gatewayUrl = ResumeGatewayUrl || 'wss://gateway.discord.gg/?v=9&encoding=json';
     ws = new WebSocket(gatewayUrl);
     
     ws.on('open', () => {
         console.log(' Connected to Discord Gateway');
     });
     
-    ws.on('message', async (data) => {
-        const message = JSON.parse(data);
+    ws.on('message', async (Data) => {
+        const message = JSON.parse(Data);
         const { op, d, t, s } = message;
         
-        if (s) sessionId = s;
+        if (s) SessionId = s;
         
         switch (op) {
-            case 10: // Hello
-                startHeartbeat(d.heartbeat_interval);
-                identify();
+            case 10:
+                StartHeartbeat(d.heartbeat_interval);
+                DiscordPayload();
                 break;
                 
-            case 11: // Heartbeat ACK
+            case 11:
                 break;
                 
-            case 0: // Dispatch
-                await handleDispatch(t, d);
+            case 0:
+                await ConsoleLog(t, d);
                 break;
                 
-            case 7: // Reconnect
-                console.log(' Discord requested reconnect');
-                reconnect();
+            case 7:
+                console.log(' Discord requested Reconnect');
+                Reconnect();
                 break;
                 
-            case 9: // Invalid Session
+            case 9:
                 console.log(' Invalid session - reconnecting...');
-                sessionId = null;
-                setTimeout(() => reconnect(), 5000);
+                SessionId = null;
+                setTimeout(() => Reconnect(), 5000);
                 break;
         }
     });
@@ -293,38 +334,40 @@ function connect() {
     
     ws.on('close', (code) => {
         console.log(` Disconnected (code: ${code})`);
-        clearInterval(heartbeatInterval);
+        clearInterval(HeartbeatInterval);
         
         if (code !== 1000) {
             console.log(' Reconnecting in 5 seconds...');
-            setTimeout(() => reconnect(), 5000);
+            setTimeout(() => Reconnect(), 5000);
         }
     });
 }
 
-function startHeartbeat(interval) {
-    clearInterval(heartbeatInterval);
-    heartbeatInterval = setInterval(() => {
+function StartHeartbeat(interval) {
+    clearInterval(HeartbeatInterval);
+    HeartbeatInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ op: 1, d: sessionId }));
+            ws.send(JSON.stringify({ op: 1, d: SessionId }));
         }
     }, interval);
 }
 
-function identify() {
+// "VERY HARD" STUFF 2025 I BREAK MONITOR
+
+function DiscordPayload() {
     const payload = {
-        op: sessionId ? 6 : 2, 
-        d: sessionId ? {
-            token: config.discordToken,
-            session_id: sessionId,
-            seq: sessionId
+        op: SessionId ? 6 : 2, 
+        d: SessionId ? {
+            token: SniperConfig.AccountToken,
+            session_id: SessionId,
+            seq: SessionId
         } : {
-            token: config.discordToken,
+            token: SniperConfig.AccountToken,
             intents: 33281, 
             properties: {
-                $os: 'windows',
-                $browser: 'chrome',
-                $device: 'pc'
+                $os: 'Windows',
+                $browser: 'Chrome',
+                $device: 'Pc'
             }
         }
     };
@@ -332,118 +375,120 @@ function identify() {
     ws.send(JSON.stringify(payload));
 }
 
-async function handleDispatch(event, data) {
-    switch (event) {
+async function ConsoleLog(Events, Data) {
+    switch (Events) {
         case 'READY':
-            resumeGatewayUrl = data.resume_gateway_url;
-            username = data.user.username;
+            ResumeGatewayUrl = Data.resume_gateway_url;
+            username = Data.user.username;
             console.clear();
             console.log(`
 ╔════════════════════════════════════════╗
-║   🎯 PEKORA.ZIP DISCORD SNIPER BOT     ║
+║      PEKORA.ZIP DISCORD SNIPER BOT     ║
 ║           TIX FIXED VERSION            ║
+║   (Made With love - Betrval)           ║
 ╠════════════════════════════════════════╣
-║   Status: ONLINE ✅                    ║
+║   Status: ONLINE                       ║
 ║   User: ${username.padEnd(28)}║
-║   Monitoring: ${config.channelIds.length} channels            ║
-║   Auto-Buy: ${config.enabled ? 'ENABLED ✅' : 'DISABLED ❌'}             ║
+║   Monitoring: ${SniperConfig.channelIds.length} channel(s)            ║
+║   Auto-Buy: ${SniperConfig.IsEnabled ? 'ENABLED' : 'DISABLED'}                   ║
 ╚════════════════════════════════════════╝
 
-📊 Monitoring Channels:
-${config.channelIds.map(id => `   • ${id}`).join('\n')}
+Monitoring Channels:
+${SniperConfig.channelIds.map(id => `   • ${id}`).join('\n')}
 
-   LIVE - Watching for item links...
+   LIVE - Watching for Item links...
 ════════════════════════════════════════
 `);
             break;
             
         case 'MESSAGE_CREATE':
-            if (!config.channelIds.includes(data.channel_id)) return;
+            if (!SniperConfig.channelIds.includes(Data.channel_id)) return;
             
-            stats.messages++;
+            CurrentStats.messages++;
             
-            const itemIds = extractItemIds(data.content);
+            const itemIds = GetItemIds(Data.content);
             if (itemIds.length === 0) return;
             
 
-            const newItemIds = itemIds.filter(id => !processedItems.has(id));
-            if (newItemIds.length === 0) {
+            const ItemIds = itemIds.filter(id => !ProcessedItems.has(id));
+            if (ItemIds.length === 0) {
                 console.log(` All items already processed`);
                 return;
             }
             
 
-            newItemIds.forEach(id => processedItems.add(id));
-            stats.items += newItemIds.length;
+            ItemIds.forEach(id => ProcessedItems.add(id));
+            CurrentStats.items += ItemIds.length;
             
             console.log(`
 ${'═'.repeat(40)}
-  NEW ITEMS DETECTED! (${newItemIds.length} items)
+  NEW ITEMS DETECTED! (${ItemIds.length} items)
 ${'═'.repeat(40)}
-  Channel: ${data.channel_id}
-  Author: ${data.author?.username || 'Unknown'}
-  Item IDs: ${newItemIds.join(', ')}
-  Message: "${data.content.substring(0, 80)}..."
+  Channel: ${Data.channel_id}
+  Author: ${Data.author?.username || 'Unknown'}
+  Item IDs: ${ItemIds.join(', ')}
+  Message: "${Data.content.substring(0, 80)}..."
   Time: ${new Date().toLocaleTimeString()}
-  Stats: ${stats.messages} msgs | ${stats.items} items | ${stats.purchases} purchases`);
+  Stats: ${CurrentStats.messages} msgs | ${CurrentStats.items} items | ${CurrentStats.purchases} purchases`);
             
-            if (!config.enabled) {
+            if (!SniperConfig.IsEnabled) {
                 console.log('Auto-buy DISABLED\n');
                 return;
             }
             
-            // Process all items in parallel for maximum speed
-            console.log(`\nProcessing ${newItemIds.length} items in parallel...`);
+            console.log(`\nProcessing ${ItemIds.length} items in parallel...`);
             
-            if (config.buyDelay > 0) {
-                await new Promise(r => setTimeout(r, config.buyDelay));
+            if (SniperConfig.PurchaseDelay > 0) {
+                await new Promise(r => setTimeout(r, SniperConfig.PurchaseDelay));
             }
             
-            // Purchase all items simultaneously
-            const purchasePromises = newItemIds.map(itemId => 
-                purchaseItem(itemId).catch(err => {
-                    console.log(`   Error processing ${itemId}: ${err.message}`);
+            const PurchasePromises = ItemIds.map(ItemId => 
+                PurchaseItem(ItemId).catch(err => {
+                    console.log(`   Error processing ${ItemId}: ${err.message}`);
                     return false;
                 })
             );
             
-            const results = await Promise.all(purchasePromises);
-            const successCount = results.filter(r => r).length;
+            const FinalResult = await Promise.all(PurchasePromises);
+            const Completed = FinalResult.filter(r => r).length;
             
-            console.log(`\n📊 Batch complete: ${successCount}/${newItemIds.length} successful purchases`);
+            console.log(`\n📊 Batch complete: ${Completed}/${ItemIds.length} successful purchases`);
             console.log('═'.repeat(40));
             break;
     }
 }
 
-function reconnect() {
+function Reconnect() {
     if (ws) {
         ws.terminate();
     }
-    connect();
+    ConnectToDiscord();
 }
 
-// ============= STARTUP =============
+// Hello to Console
 console.log(`
  PEKORA.ZIP DISCORD SNIPER
 ════════════════════════════
 
 `);
 
-// Start connection
-connect();
+// Hello to Discord
 
-// Graceful shutdown
+ConnectToDiscord();
+
+// Bye bye
+
 process.on('SIGINT', () => {
     console.log('\n\nShutting down...');
-    console.log(`Final stats: ${stats.messages} messages | ${stats.items} items | ${stats.purchases} purchases`);
+    console.log(`Final CurrentStats: ${CurrentStats.messages} messages | ${CurrentStats.items} items | ${CurrentStats.purchases} purchases`);
     
     if (ws) ws.close(1000);
-    clearInterval(heartbeatInterval);
+    clearInterval(HeartbeatInterval);
     process.exit(0);
 });
 
-// Handle errors
+// Fuck you errors
+
 process.on('uncaughtException', (error) => {
     console.error('Error:', error.message);
 });
@@ -451,3 +496,5 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (error) => {
     console.error('Unhandled:', error);
 });
+
+//
